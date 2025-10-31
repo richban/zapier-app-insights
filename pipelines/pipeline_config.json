@@ -1,0 +1,23 @@
+{
+  "id": "cd810ea0-f68f-4081-9683-9a249e3d8eab",
+  "pipeline_type": "WORKSPACE",
+  "name": "app_insights_pipeline",
+  "configuration": {
+    "snapshot_date": "20251022"
+  },
+  "libraries": [
+    {
+      "glob": {
+        "include": "/Workspace/Users/rbanyi@me.com/app_insights_dlt_pipeline/dlt_pipeline"
+      }
+    }
+  ],
+  "schema": "rbanyi_mecom",
+  "continuous": false,
+  "development": false,
+  "photon": true,
+  "channel": "CURRENT",
+  "catalog": "interview_data_pde",
+  "serverless": true,
+  "root_path": "/Workspace/Users/rbanyi@me.com/app_insights_dlt_pipeline"
+}
