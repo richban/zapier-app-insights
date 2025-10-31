@@ -37,6 +37,9 @@ class DatabaseService:
             server_hostname=self.settings.databricks_server_hostname,
             http_path=self.settings.databricks_http_path,
             access_token=self.settings.databricks_token,
+            session_configuration={
+                "query_tags": "source:insights-api,team:zapier,service:analytics"
+            },
         )
         try:
             yield conn
