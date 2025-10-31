@@ -120,7 +120,7 @@ def get_category_insights(
 
 
 @router.get("/app-health-assessment", response_model=AppHealthAssessmentResponse)
-async def get_app_health_assessment(
+def get_app_health_assessment(
     snapshot_date: date | None = Query(None, description="Specific snapshot date"),
     limit_per_segment: int = Query(10, ge=1, le=50, description="Max apps per segment"),
 ) -> AppHealthAssessmentResponse:
@@ -143,109 +143,125 @@ async def get_app_health_assessment(
     if snapshot_date is None:
         snapshot_date = get_latest_snapshot(settings.full_silver_table)
 
-    # First, get total apps and median popularity (needed for subsequent queries)
-    total_query = f"""
-    SELECT COUNT(*) as total FROM {settings.full_silver_table}
-    WHERE snapshot_date = '{snapshot_date}'
-    """
-
-    median_query = f"""
-    SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY popularity) as median_popularity
-    FROM {settings.full_silver_table}
-    WHERE snapshot_date = '{snapshot_date}' AND popularity > 0
-    """
-
-    # Run prerequisite queries in parallel
-    total_result, median_result = await asyncio.gather(
-        db.execute_query_async(total_query),
-        db.execute_query_async(median_query),
+    # Single optimized CTE query - all segments in one database round trip 🚀
+    query = f"""
+    WITH stats AS (
+        -- Calculate baseline statistics once
+        SELECT
+            COUNT(*) as total_apps,
+            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY popularity) as median_popularity
+        FROM {settings.full_silver_table}
+        WHERE snapshot_date = '{snapshot_date}' AND popularity > 0
+    ),
+    high_risk AS (
+        -- Popular apps not updated in 90+ days
+        SELECT
+            'high_risk' as segment,
+            slug, name, primary_category as category, popularity, zap_usage_count,
+            days_since_last_update, age_in_days, is_featured
+        FROM {settings.full_silver_table}
+        CROSS JOIN stats
+        WHERE snapshot_date = '{snapshot_date}'
+          AND days_since_last_update >= 90
+          AND popularity > stats.median_popularity
+        ORDER BY popularity DESC
+        LIMIT {limit_per_segment}
+    ),
+    rising_stars AS (
+        -- New apps (< 180 days) with high engagement
+        SELECT
+            'rising_stars' as segment,
+            slug, name, primary_category as category, popularity, zap_usage_count,
+            days_since_last_update, age_in_days, is_featured
+        FROM {settings.full_silver_table}
+        CROSS JOIN stats
+        WHERE snapshot_date = '{snapshot_date}'
+          AND age_in_days <= 180
+          AND (popularity > stats.median_popularity OR zap_usage_count > 100)
+        ORDER BY popularity DESC, zap_usage_count DESC
+        LIMIT {limit_per_segment}
+    ),
+    featured_underperformers AS (
+        -- Featured apps below median popularity
+        SELECT
+            'featured_underperformers' as segment,
+            slug, name, primary_category as category, popularity, zap_usage_count,
+            days_since_last_update, age_in_days, is_featured
+        FROM {settings.full_silver_table}
+        CROSS JOIN stats
+        WHERE snapshot_date = '{snapshot_date}'
+          AND is_featured = true
+          AND popularity < stats.median_popularity
+        ORDER BY popularity ASC
+        LIMIT {limit_per_segment}
+    ),
+    beta_graduation AS (
+        -- Beta apps with proven usage
+        SELECT
+            'beta_graduation' as segment,
+            slug, name, primary_category as category, popularity, zap_usage_count,
+            days_since_last_update, age_in_days, is_featured
+        FROM {settings.full_silver_table}
+        CROSS JOIN stats
+        WHERE snapshot_date = '{snapshot_date}'
+          AND is_beta = true
+          AND age_in_days >= 90
+          AND (popularity > stats.median_popularity * 0.5 OR zap_usage_count > 50)
+        ORDER BY popularity DESC, zap_usage_count DESC
+        LIMIT {limit_per_segment}
+    ),
+    all_segments AS (
+        SELECT *, (SELECT total_apps FROM stats) as total_apps FROM high_risk
+        UNION ALL
+        SELECT *, (SELECT total_apps FROM stats) as total_apps FROM rising_stars
+        UNION ALL
+        SELECT *, (SELECT total_apps FROM stats) as total_apps FROM featured_underperformers
+        UNION ALL
+        SELECT *, (SELECT total_apps FROM stats) as total_apps FROM beta_graduation
     )
-
-    total_apps = total_result[0]["total"] if total_result else 0
-    median_popularity = median_result[0]["median_popularity"] if median_result else 0
-
-    # Build all segment queries
-    high_risk_query = f"""
-    SELECT
-        slug, name, primary_category as category, popularity, zap_usage_count,
-        days_since_last_update, age_in_days, is_featured
-    FROM {settings.full_silver_table}
-    WHERE snapshot_date = '{snapshot_date}'
-      AND days_since_last_update >= 90
-      AND popularity > {median_popularity}
-    ORDER BY popularity DESC
-    LIMIT {limit_per_segment}
+    SELECT * FROM all_segments
     """
 
-    rising_stars_query = f"""
-    SELECT
-        slug, name, primary_category as category, popularity, zap_usage_count,
-        days_since_last_update, age_in_days, is_featured
-    FROM {settings.full_silver_table}
-    WHERE snapshot_date = '{snapshot_date}'
-      AND age_in_days <= 180
-      AND (popularity > {median_popularity} OR zap_usage_count > 100)
-    ORDER BY popularity DESC, zap_usage_count DESC
-    LIMIT {limit_per_segment}
-    """
+    # Execute single optimized query
+    results = db.execute_query(query)
 
-    featured_underperformers_query = f"""
-    SELECT
-        slug, name, primary_category as category, popularity, zap_usage_count,
-        days_since_last_update, age_in_days, is_featured
-    FROM {settings.full_silver_table}
-    WHERE snapshot_date = '{snapshot_date}'
-      AND is_featured = true
-      AND popularity < {median_popularity}
-    ORDER BY popularity ASC
-    LIMIT {limit_per_segment}
-    """
+    # Group results by segment
+    segments: dict[str, list[dict]] = {
+        "high_risk": [],
+        "rising_stars": [],
+        "featured_underperformers": [],
+        "beta_graduation": [],
+    }
 
-    beta_graduation_query = f"""
-    SELECT
-        slug, name, primary_category as category, popularity, zap_usage_count,
-        days_since_last_update, age_in_days, is_featured
-    FROM {settings.full_silver_table}
-    WHERE snapshot_date = '{snapshot_date}'
-      AND is_beta = true
-      AND age_in_days >= 90
-      AND (popularity > {median_popularity * 0.5} OR zap_usage_count > 50)
-    ORDER BY popularity DESC, zap_usage_count DESC
-    LIMIT {limit_per_segment}
-    """
-
-    # Run all segment queries in parallel 🚀
-    high_risk_results, rising_stars_results, featured_underperformers_results, beta_graduation_results = (
-        await asyncio.gather(
-            db.execute_query_async(high_risk_query),
-            db.execute_query_async(rising_stars_query),
-            db.execute_query_async(featured_underperformers_query),
-            db.execute_query_async(beta_graduation_query),
-        )
-    )
+    total_apps = 0
+    for row in results:
+        segment = row.pop("segment")
+        total_apps = row.pop("total_apps")  # Same for all rows
+        if segment in segments:
+            segments[segment].append(row)
 
     # Build response
     return AppHealthAssessmentResponse(
         snapshot_date=snapshot_date,
         total_apps_analyzed=total_apps,
         high_risk_apps=RiskSegment(
-            count=len(high_risk_results),
+            count=len(segments["high_risk"]),
             description="Popular apps not updated in 90+ days - maintenance risk",
-            apps=[AppRiskItem(**row) for row in high_risk_results],
+            apps=[AppRiskItem(**row) for row in segments["high_risk"]],
         ),
         rising_stars=RiskSegment(
-            count=len(rising_stars_results),
+            count=len(segments["rising_stars"]),
             description="New apps (< 180 days) with high engagement - growth opportunity",
-            apps=[AppRiskItem(**row) for row in rising_stars_results],
+            apps=[AppRiskItem(**row) for row in segments["rising_stars"]],
         ),
         featured_underperformers=RiskSegment(
-            count=len(featured_underperformers_results),
+            count=len(segments["featured_underperformers"]),
             description="Featured apps below median popularity - review featuring strategy",
-            apps=[AppRiskItem(**row) for row in featured_underperformers_results],
+            apps=[AppRiskItem(**row) for row in segments["featured_underperformers"]],
         ),
         beta_graduation_ready=RiskSegment(
-            count=len(beta_graduation_results),
+            count=len(segments["beta_graduation"]),
             description="Beta apps with proven usage - ready for promotion to stable",
-            apps=[AppRiskItem(**row) for row in beta_graduation_results],
+            apps=[AppRiskItem(**row) for row in segments["beta_graduation"]],
         ),
     )
