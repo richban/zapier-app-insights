@@ -25,24 +25,7 @@ Modern FastAPI service serving Zapier app catalog insights from Databricks.
 
 ### Installation
 
-#### Option 1: Using Nix + direnv (Recommended)
-
-```bash
-# Navigate to api directory
-cd api
-
-# Allow direnv (automatically loads Nix environment + .env)
-direnv allow
-
-# Install Python dependencies
-uv sync
-
-# Copy environment template and configure
-cp .env.example .env
-# Edit .env with your Databricks credentials
-```
-
-#### Option 2: Using uv only
+#### Using uv only
 
 ```bash
 # Install uv (if not already installed)
