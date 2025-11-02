@@ -99,16 +99,6 @@ Check API and database connectivity status.
 curl http://localhost:8000/health
 ```
 
-Response:
-```json
-{
-  "status": "healthy",
-  "timestamp": "2025-10-30T12:00:00Z",
-  "latest_snapshot_date": "2025-10-30",
-  "silver_row_count": 7234
-}
-```
-
 ### Premium Analysis
 
 **GET** `/insights/premium-analysis`
@@ -120,18 +110,6 @@ Get premium vs free app breakdown with percentages.
 
 ```bash
 curl http://localhost:8000/insights/premium-analysis
-```
-
-Response:
-```json
-{
-  "snapshot_date": "2025-10-30",
-  "total_apps": 7234,
-  "premium_apps": 543,
-  "free_apps": 6691,
-  "premium_percentage": 7.51,
-  "featured_apps": 124
-}
 ```
 
 ### Category Insights
@@ -149,21 +127,6 @@ Get category-level aggregated statistics.
 curl "http://localhost:8000/insights/categories?min_app_count=10&limit=5"
 ```
 
-Response:
-```json
-[
-  {
-    "category_slug": "productivity",
-    "category_name": "Productivity",
-    "app_count": 892,
-    "premium_count": 67,
-    "featured_count": 23,
-    "avg_popularity": 1245.5,
-    "avg_age_days": 654
-  }
-]
-```
-
 ### App Health Assessment
 
 **GET** `/insights/app-health-assessment`
@@ -176,56 +139,6 @@ Get actionable app health and risk assessment with strategic segments.
 
 ```bash
 curl "http://localhost:8000/insights/app-health-assessment?limit_per_segment=5"
-```
-
-Response:
-```json
-{
-  "snapshot_date": "2025-10-30",
-  "total_apps_analyzed": 7234,
-  "high_risk_apps": {
-    "count": 23,
-    "description": "Popular apps not updated in 90+ days - maintenance risk",
-    "apps": [
-      {
-        "slug": "legacy-app",
-        "name": "Legacy CRM",
-        "category": "crm",
-        "popularity": 8500,
-        "zap_usage_count": 12000,
-        "days_since_last_update": 245,
-        "age_in_days": 1825,
-        "is_featured": true
-      }
-    ]
-  },
-  "rising_stars": {
-    "count": 15,
-    "description": "New apps (< 180 days) with high engagement - growth opportunity",
-    "apps": [
-      {
-        "slug": "new-ai-tool",
-        "name": "AI Assistant Pro",
-        "category": "productivity",
-        "popularity": 4200,
-        "zap_usage_count": 850,
-        "days_since_last_update": 5,
-        "age_in_days": 120,
-        "is_featured": false
-      }
-    ]
-  },
-  "featured_underperformers": {
-    "count": 8,
-    "description": "Featured apps below median popularity - review featuring strategy",
-    "apps": [...]
-  },
-  "beta_graduation_ready": {
-    "count": 12,
-    "description": "Beta apps with proven usage - ready for promotion to stable",
-    "apps": [...]
-  }
-}
 ```
 
 **Product Team Actions:**
@@ -311,7 +224,6 @@ Clients (JSON responses)
 ### Not Implemented (MVP Scope)
 
 - [ ] **Authentication**: API key auth, rate limiting
-- [ ] **Connection Pooling**: Reduce per-request latency
 - [ ] **Caching**: Redis for frequently accessed endpoints
 - [ ] **Comprehensive Testing**: Unit + integration + load tests
 - [ ] **Monitoring**: Prometheus metrics, Datadog APM
@@ -326,30 +238,15 @@ Clients (JSON responses)
    - Secrets management (AWS Secrets Manager / Vault)
    - SQL injection prevention (parameterized queries)
 
-2. **Reliability**:
-   - Connection pooling (reduce latency)
-   - Circuit breaker pattern (handle DB failures)
-   - Retry logic with exponential backoff
-   - Health checks with DB connectivity validation
-
-3. **Observability**:
+2. **Observability**:
    - Structured logging with correlation IDs
    - RED metrics (rate, errors, duration)
-   - Distributed tracing (OpenTelemetry)
    - Alerting (PagerDuty integration)
 
 4. **Performance**:
-   - Query optimization (Z-ordering on Databricks)
    - Caching layer (Redis with TTL)
-   - Response compression (gzip)
-   - CDN for static docs
 
 5. **Deployment**:
-   - Containerized (Docker + Kubernetes)
+   - Containerized (Docker)
    - Auto-scaling based on traffic
-   - Blue-green deployment
    - Infrastructure as Code (Terraform)
-
-## License
-
-MIT
