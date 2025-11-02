@@ -28,18 +28,9 @@ End-to-end data platform that transforms daily snapshots of Zapier app data into
 
 ### Part C: Documentation ✅
 - **Setup instructions** - This README + detailed `api/README.md`  +  `./docs`
-- **Architecture reasoning** - Medallion layers, idempotency, surrogate keys
-- **Assumptions & tradeoffs** - Documented in PRD "What's NOT Implemented" section
-- **Production steps** - Security, reliability, observability requirements outlined below
+- **Architecture** - Medallion layers, idempotency, surrogate keys
+- **Future Work** - Future work scoped out in Future Work section
 
-### Part D: Future Work ⚠️
-- Schema evolution framework
-- Comprehensive test suite (unit + integration + E2E)
-- CI/CD automation with deployment pipeline
-- Advanced observability (tracing, metrics, dashboards)
-- Scheduling
-
----
 
 ## Quick Start
 
@@ -69,7 +60,6 @@ End-to-end data platform that transforms daily snapshots of Zapier app data into
 - `GET /insights/app-health-assessment` - Risk segments (high risk, rising stars, featured underperformers, beta graduation)
 
 See [`api/README.md`](api/README.md) for detailed API documentation.
-
 
 
 ## Architecture Highlights
@@ -134,10 +124,26 @@ See [`api/README.md`](api/README.md) for detailed API documentation.
 ```
 
 
-## Production Considerations & 
+## Production Gaps & Future Work
 
-**What's Missing for Production:**
+### Orchestration & Scheduling (Current State: Manual)
 
+**Current Implementation:**
+- Notebooks run manually via Databricks UI with widget parameter
+- No automated daily scheduling configured
+- **Delta Live Tables** - Already implemented in `pipelines/dlt_pipeline.py` (alternative approach)
+
+
+**Production Options:**
+
+| Approach | Description | Pros | Cons |
+|----------|-------------|------|------|
+| **Databricks Jobs** | Schedule notebook as job with parameters | Native integration, simple setup | Coupled to Databricks |
+| **Delta Live Tables** | DLT continuous/triggered pipelines | Auto-scaling, data lineage, quality checks |  |
+| **Airflow/Dagster** | External orchestrator calls Databricks API | Multi-platform, complex workflows | Additional infrastructure |
+
+
+---
 
 ### Future Extensions (Scoped Out)
 
@@ -167,11 +173,6 @@ See [`api/README.md`](api/README.md) for detailed API documentation.
 - [ ] Unit tests for transformations
 - [ ] Integration tests for API endpoints
 - [ ] Data quality tests for pipeline validations
-
-#### Deployment
-- [ ] Docker containerization
-- [ ] CI/CD pipeline (GitHub Actions)
-- [ ] Infrastructure as Code (Terraform)
 
 
 ---
