@@ -58,15 +58,10 @@
 # COMMAND ----------
 
 from pyspark.sql.functions import (
-    col,
     coalesce,
-    lit,
-    struct,
     sha2,
     concat_ws,
-    to_date,
     transform,
-    current_timestamp,
     col,
     count,
     sum as sql_sum,
@@ -80,12 +75,49 @@ from pyspark.sql.functions import (
     array_sort,
     desc,
     row_number,
+    expr,
 )
 from pyspark.sql.window import Window
-from pyspark.sql.types import DateType
 
 # COMMAND ----------
 
+available_dates_raw = dbutils.fs.ls(
+    "/Volumes/interview_data_pde/app_insights_assignment/raw_apps/"
+)
+
+# Parse directory names (YYYYMMDD format)
+available_dates_yyyymmdd = sorted([
+    d.name.rstrip('/')
+    for d in available_dates_raw
+    if d.name.rstrip('/').isdigit() and len(d.name.rstrip('/')) == 8
+])
+
+if not available_dates_yyyymmdd:
+    raise ValueError("❌ No snapshot dates found!")
+
+# Convert to ISO format (YYYY-MM-DD) for dropdown and backfill compatibility
+available_dates_iso = [
+    f"{d[:4]}-{d[4:6]}-{d[6:]}" for d in available_dates_yyyymmdd
+]
+
+print(f"📅 Available Partitions: {available_dates_iso[0]} to {available_dates_iso[-1]} ({len(available_dates_iso)} dates)")
+
+# Create dropdown widget with ISO dates (matches {{backfill.iso_date}} format)
+dbutils.widgets.dropdown(
+    "snapshot_date",
+    available_dates_iso[-1],  # Default to latest
+    available_dates_iso,      # ISO format dates
+    "Snapshot Date"
+)
+
+# Get selected date and convert to YYYYMMDD for file paths
+snapshot_date_iso = dbutils.widgets.get("snapshot_date")
+snapshot_date = snapshot_date_iso.replace("-", "")  # YYYY-MM-DD → YYYYMMDD
+
+print(f"✅ Selected: {snapshot_date_iso} (using {snapshot_date} for paths)")
+
+
+# COMMAND ----------
 
 path = f"/Volumes/interview_data_pde/app_insights_assignment/raw_apps/{snapshot_date}/*.json"
 silver_table = "interview_data_pde.rbanyi_mecom.silver_apps_daily_snapshot"
@@ -93,21 +125,13 @@ gold_app_metrics_daily_table = "interview_data_pde.rbanyi_mecom.gold_app_metrics
 gold_category_metrics_daily_table = "interview_data_pde.rbanyi_mecom.gold_category_metrics_daily"
 quarantine_table = "interview_data_pde.rbanyi_mecom.bronze_apps_quarantine"
 
-snapshot_date = dbutils.widgets.get("snapshot_date")
-
-display(
-  dbutils.fs.ls(
-    "/Volumes/interview_data_pde/app_insights_assignment/raw_apps/"
-  )
-)
-
 # COMMAND ----------
 
 df_bronze = spark.read.json(path)
-df_bronze = df_bronze.withColumn("snapshot_date", to_date(lit(snapshot_date), "yyyyMMdd"))
+df_bronze = df_bronze.withColumn("snapshot_date", to_date(lit(snapshot_date_iso)))
 
 print(f"✅ Loaded {df_bronze.count()} records from {path}")
-# df_bronze.display()
+df_bronze.display()
 
 # COMMAND ----------
 
@@ -116,9 +140,9 @@ print(f"✅ Loaded {df_bronze.count()} records from {path}")
 # MAGIC
 # MAGIC Detect and remove duplicate records by slug (natural key):
 # MAGIC - Count duplicates by slug
-# MAGIC - Keep record with highest popularity
+# MAGIC - Keep record with lowest popularity (lower rank = more popular)
 # MAGIC - Tie-breaker: highest internal_id
-# MAGIC - ⚠️ Popularity is defined here as highest better
+# MAGIC - ⚠️ Popularity is a RANK where lower is better (1 = most popular)
 
 # COMMAND ----------
 
@@ -137,10 +161,11 @@ if duplicate_count > 0:
     print("\n⚠️  WARNING: Duplicate slugs found!")
     duplicate_slugs.orderBy(desc("count")).show(10)
 
-    print("Applying deduplication by slug (keeping record with highest popularity)")
+    print("Applying deduplication by slug (keeping record with lowest popularity rank)")
 
-    # Define window for deduplication (keep highest popularity)
-    window = Window.partitionBy("slug").orderBy(desc("popularity"), desc("internal_id"))
+    # Define window for deduplication (keep LOWEST popularity = highest rank)
+    # Lower popularity number = more popular (it's a ranking: 1 = #1 app)
+    window = Window.partitionBy("slug").orderBy(col("popularity").asc(), desc("internal_id"))
 
     df_bronze = df_bronze.withColumn("row_num", row_number().over(window)) \
         .filter(col("row_num") == 1) \
@@ -158,7 +183,7 @@ else:
 # MAGIC - Detect negative values (invalid for counts/metrics)
 # MAGIC - Count zero values
 # MAGIC - Display statistical summary
-# MAGIC - Capture records that fail quality checks for investigation (⚠️ this is for demonstration purposes) 
+# MAGIC - Capture records that fail quality checks for investigation (⚠️ this is for demonstration purposes)
 
 # COMMAND ----------
 
@@ -179,14 +204,15 @@ quarantine_count = df_quarantine.count()
 print(f"\n⚠️  Quarantined {quarantine_count} records with quality issues")
 
 if quarantine_count > 0:
-    # Write quarantined records to table
+    # Write quarantined records to table (idempotent - overwrite partition)
     df_quarantine.write \
         .format("delta") \
-        .mode("append") \
+        .mode("overwrite") \
         .partitionBy("snapshot_date") \
+        .option("partitionOverwriteMode", "dynamic") \
         .saveAsTable(quarantine_table)
 
-    print(f"✅ Quarantined records saved to {quarantine_table}")
+    print(f"✅ Quarantined records saved to {quarantine_table} (dynamic overwrite)")
 
     # Show sample of quarantined records
     print("\nSample quarantined records:")
@@ -286,10 +312,11 @@ df_silver.write \
     .mode("overwrite") \
     .partitionBy("snapshot_date") \
     .option("overwriteSchema", "false") \
-    .saveAsTable(gold_app_metrics_daily_table)
+    .option("partitionOverwriteMode", "dynamic") \
+    .saveAsTable(silver_table)
 
 print(f"✅ Successfully wrote {df_silver.count()} records to {silver_table}")
-print(f"✅ Partition: snapshot_date={snapshot_date}")
+print(f"✅ Partition: snapshot_date={snapshot_date_iso} (dynamic overwrite - other partitions preserved)")
 
 # COMMAND ----------
 
@@ -306,10 +333,10 @@ print(f"✅ Partition: snapshot_date={snapshot_date}")
 # COMMAND ----------
 
 df_silver = spark.table(silver_table).filter(
-    col("snapshot_date") == to_date(lit(snapshot_date), "yyyyMMdd")
+    col("snapshot_date") == to_date(lit(snapshot_date_iso))
 )
 
-print(f"Silver records for {snapshot_date}: {df_silver.count()}")
+print(f"Silver records for {snapshot_date_iso}: {df_silver.count()}")
 
 
 df_gold_daily = df_silver.groupBy("snapshot_date").agg(
@@ -333,11 +360,13 @@ df_gold_daily = df_silver.groupBy("snapshot_date").agg(
     sql_sum(when((col("age_in_days") > 30) & (col("age_in_days") <= 365), 1).otherwise(0)).alias("apps_age_30d_1y"),
     sql_sum(when(col("age_in_days") > 365, 1).otherwise(0)).alias("apps_age_over_1y"),
 
-    # Popularity metrics
-    sql_sum("popularity").alias("total_popularity"),
-    avg("popularity").alias("avg_popularity"),
+    # Usage metrics (actual counts - these ARE additive)
     sql_sum("zap_usage_count").alias("total_zap_usage"),
     avg("zap_usage_count").alias("avg_zap_usage"),
+
+    # Popularity rank distribution (lower rank = more popular)
+    expr("MIN(popularity)").alias("best_popularity_rank"),  # Lowest number = most popular
+    expr("MAX(popularity)").alias("worst_popularity_rank"),  # Highest number = least popular
 
     # Content quality
     sql_sum(when(length(col("description")) > 0, 1).otherwise(0)).alias("apps_with_description"),
@@ -359,11 +388,12 @@ df_gold_daily.write \
     .format("delta") \
     .mode("overwrite") \
     .partitionBy("snapshot_date") \
-    .option("overwriteSchema", "true") \
+    .option("overwriteSchema", "false") \
+    .option("partitionOverwriteMode", "dynamic") \
     .saveAsTable(gold_app_metrics_daily_table)
 
 print(f"✅ Successfully wrote daily metrics to {gold_app_metrics_daily_table}")
-print(f"✅ Partition: snapshot_date={snapshot_date}")
+print(f"✅ Partition: snapshot_date={snapshot_date_iso} (dynamic overwrite)")
 
 # COMMAND ----------
 
@@ -387,11 +417,13 @@ df_gold_categories = df_silver.groupBy("snapshot_date", "primary_category", "pri
     sql_sum(when(col("is_beta"), 1).otherwise(0)).alias("beta_count"),
     sql_sum(when(col("is_upcoming"), 1).otherwise(0)).alias("upcoming_count"),
 
-    # Popularity metrics
-    avg("popularity").alias("avg_popularity"),
-    sql_sum("popularity").alias("total_popularity"),
+    # Usage metrics (actual counts - additive)
     avg("zap_usage_count").alias("avg_zap_usage"),
     sql_sum("zap_usage_count").alias("total_zap_usage"),
+
+    # Popularity rank distribution (lower = better, NOT additive)
+    expr("MIN(popularity)").alias("best_popularity_rank"),
+    expr("MAX(popularity)").alias("worst_popularity_rank"),
 
     # Age metrics
     avg("age_in_days").alias("avg_age_in_days"),
@@ -417,7 +449,8 @@ df_gold_categories.write \
     .mode("overwrite") \
     .partitionBy("snapshot_date") \
     .option("overwriteSchema", "false") \
+    .option("partitionOverwriteMode", "dynamic") \
     .saveAsTable(gold_category_metrics_daily_table)
 
 print(f"✅ Successfully wrote category metrics to {gold_category_metrics_daily_table}")
-print(f"✅ Partition: snapshot_date={snapshot_date}")
+print(f"✅ Partition: snapshot_date={snapshot_date_iso} (dynamic overwrite)")
