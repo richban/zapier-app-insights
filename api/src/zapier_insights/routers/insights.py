@@ -1,6 +1,5 @@
 """Insights API endpoints."""
 
-import asyncio
 from datetime import date
 
 from fastapi import APIRouter, HTTPException, Query
@@ -9,7 +8,9 @@ from ..config import get_settings
 from ..database import db
 from ..models import (
     AppHealthAssessmentResponse,
+    AppMetricSnapshot,
     AppRiskItem,
+    AppTimeSeriesResponse,
     CategoryInsight,
     PremiumAnalysisResponse,
     RiskSegment,
@@ -86,7 +87,8 @@ def get_category_insights(
     """
     Get category-level aggregated statistics.
 
-    Returns metrics for each category including app counts and popularity.
+    Returns metrics for each category including app counts and popularity rank distribution.
+    Note: Popularity is a rank where lower numbers = more popular apps.
     """
     # Get latest snapshot if not specified
     if snapshot_date is None:
@@ -100,7 +102,8 @@ def get_category_insights(
         app_count,
         premium_count,
         featured_count,
-        ROUND(avg_popularity, 2) as avg_popularity,
+        best_popularity_rank,
+        worst_popularity_rank,
         ROUND(avg_age_in_days, 0) as avg_age_days
     FROM {settings.full_gold_category_table}
     WHERE snapshot_date = '{snapshot_date}'
@@ -143,7 +146,7 @@ def get_app_health_assessment(
     if snapshot_date is None:
         snapshot_date = get_latest_snapshot(settings.full_silver_table)
 
-    # Single optimized CTE query - all segments in one database round trip 🚀
+    # Single optimized CTE query - all segments in one database round trip
     query = f"""
     WITH stats AS (
         -- Calculate baseline statistics once
@@ -157,8 +160,13 @@ def get_app_health_assessment(
         -- Popular apps not updated in 90+ days
         SELECT
             'high_risk' as segment,
-            slug, name, primary_category as category, popularity, zap_usage_count,
-            days_since_last_update, age_in_days, is_featured
+            slug,
+            name,
+            primary_category as category,
+            popularity,
+            zap_usage_count,
+            days_since_last_update,
+            age_in_days, is_featured
         FROM {settings.full_silver_table}
         CROSS JOIN stats
         WHERE snapshot_date = '{snapshot_date}'
@@ -171,8 +179,14 @@ def get_app_health_assessment(
         -- New apps (< 180 days) with high engagement
         SELECT
             'rising_stars' as segment,
-            slug, name, primary_category as category, popularity, zap_usage_count,
-            days_since_last_update, age_in_days, is_featured
+            slug,
+            name,
+            primary_category as category,
+            popularity,
+            zap_usage_count,
+            days_since_last_update,
+            age_in_days,
+            is_featured
         FROM {settings.full_silver_table}
         CROSS JOIN stats
         WHERE snapshot_date = '{snapshot_date}'
@@ -185,8 +199,13 @@ def get_app_health_assessment(
         -- Featured apps below median popularity
         SELECT
             'featured_underperformers' as segment,
-            slug, name, primary_category as category, popularity, zap_usage_count,
-            days_since_last_update, age_in_days, is_featured
+            slug,
+            name,
+            primary_category as category,
+            popularity,
+            zap_usage_count,
+            days_since_last_update,
+            age_in_days, is_featured
         FROM {settings.full_silver_table}
         CROSS JOIN stats
         WHERE snapshot_date = '{snapshot_date}'
@@ -199,8 +218,14 @@ def get_app_health_assessment(
         -- Beta apps with proven usage
         SELECT
             'beta_graduation' as segment,
-            slug, name, primary_category as category, popularity, zap_usage_count,
-            days_since_last_update, age_in_days, is_featured
+            slug,
+            name,
+            primary_category as category,
+            popularity,
+            zap_usage_count,
+            days_since_last_update,
+            age_in_days,
+            is_featured
         FROM {settings.full_silver_table}
         CROSS JOIN stats
         WHERE snapshot_date = '{snapshot_date}'
@@ -264,4 +289,69 @@ def get_app_health_assessment(
             description="Beta apps with proven usage - ready for promotion to stable",
             apps=[AppRiskItem(**row) for row in segments["beta_graduation"]],
         ),
+    )
+
+
+@router.get("/apps/{slug}/metrics", response_model=AppTimeSeriesResponse)
+def get_app_metrics(
+    slug: str,
+    days: int = Query(30, ge=1, le=365, description="Number of days of historical data"),
+) -> AppTimeSeriesResponse:
+    """
+    Get daily metrics for a specific app over time.
+
+    Returns historical snapshots showing how the app's metrics evolved.
+    Useful for tracking popularity trends, usage growth, and update frequency.
+    """
+    # Query silver table for app metrics across multiple snapshots
+    query = f"""
+    SELECT
+        slug,
+        name,
+        primary_category,
+        primary_category_name,
+        is_premium,
+        is_featured,
+        snapshot_date,
+        popularity,
+        zap_usage_count,
+        age_in_days,
+        days_since_last_update
+    FROM {settings.full_silver_table}
+    WHERE slug = '{slug}'
+    ORDER BY snapshot_date DESC
+    LIMIT {days}
+    """
+
+    results = db.execute_query(query)
+
+    if not results:
+        raise HTTPException(
+            status_code=404,
+            detail=f"App '{slug}' not found in any snapshots"
+        )
+
+    # Extract app metadata from first (latest) record
+    latest = results[0]
+
+    # Build metrics list
+    metrics = [
+        AppMetricSnapshot(
+            snapshot_date=row["snapshot_date"],
+            popularity=row["popularity"],
+            zap_usage_count=row["zap_usage_count"],
+            age_in_days=row["age_in_days"],
+            days_since_last_update=row["days_since_last_update"],
+        )
+        for row in results
+    ]
+
+    return AppTimeSeriesResponse(
+        slug=latest["slug"],
+        name=latest["name"],
+        primary_category=latest["primary_category"],
+        primary_category_name=latest["primary_category_name"],
+        is_premium=latest["is_premium"],
+        is_featured=latest["is_featured"],
+        metrics=metrics,
     )

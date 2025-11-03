@@ -33,7 +33,8 @@ class CategoryInsight(BaseModel):
     app_count: int = Field(..., description="Total apps in category")
     premium_count: int = Field(..., description="Premium apps in category")
     featured_count: int = Field(..., description="Featured apps in category")
-    avg_popularity: float = Field(..., description="Average popularity score")
+    best_popularity_rank: int = Field(..., description="Best (lowest) popularity rank in category")
+    worst_popularity_rank: int = Field(..., description="Worst (highest) popularity rank in category")
     avg_age_days: float = Field(..., description="Average app age in days")
 
 
@@ -89,6 +90,28 @@ class AppHealthAssessmentResponse(BaseModel):
     beta_graduation_ready: RiskSegment = Field(
         ..., description="Beta apps with proven usage (promotion candidates)"
     )
+
+
+class AppMetricSnapshot(BaseModel):
+    """Single app metrics for a specific date."""
+
+    snapshot_date: date = Field(..., description="Date of snapshot")
+    popularity: int = Field(..., description="Popularity score")
+    zap_usage_count: int = Field(..., description="Active zap count")
+    age_in_days: int = Field(..., description="App age in days")
+    days_since_last_update: int = Field(..., description="Days since last update")
+
+
+class AppTimeSeriesResponse(BaseModel):
+    """Historical metrics for a single app."""
+
+    slug: str = Field(..., description="App identifier")
+    name: str = Field(..., description="App display name")
+    primary_category: str = Field(..., description="Primary category slug")
+    primary_category_name: str = Field(..., description="Primary category name")
+    is_premium: bool = Field(..., description="Premium status")
+    is_featured: bool = Field(..., description="Featured status")
+    metrics: list[AppMetricSnapshot] = Field(..., description="Daily metrics snapshots")
 
 
 class ErrorResponse(BaseModel):
