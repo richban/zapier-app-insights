@@ -13,6 +13,12 @@ End-to-end data platform that transforms daily snapshots of Zapier app data into
 
 **Tech Stack:** PySpark, Delta Lake, FastAPI, Databricks SQL Connector
 
+### Scope and Focus for This Submission
+
+- **Emphasis on data infrastructure/pipeline**: Prioritized building a clear, reproducible medallion pipeline and an API surface over deep business-domain analysis of insights.
+- **Data reasonableness not deeply validated**: Beyond structural cleaning and basic quality checks, this submission does not assess whether upstream values “make sense” from a business perspective.
+- **Performance and resource tuning out of scope**: Given the dataset size and time constraints, no formal benchmarking or right-sizing of compute was performed; production tuning is deferred.
+
 ### Part A: Model & Transform ✅
 - **Data exploration** - Analyzed nested JSON schema, identified natural keys
 - **Transformations** - Deduplication, null handling, category flattening, surrogate key generation
@@ -68,7 +74,7 @@ See [`api/README.md`](api/README.md) for detailed API documentation.
 
 **Bronze Layer** (JSON files in Databricks Volumes)
 - Immutable daily snapshots from `/Volumes/interview_data_pde/app_insights_assignment/raw_apps/YYYYMMDD/*.json`
-- Deduplication by `slug` (natural key), keeping highest popularity
+- Deduplication by `slug` (natural key), keeping lowest popularity rank (lower = more popular)
 - Quality validation with quarantine table for failed records
 
 **Silver Layer** (`silver_apps_daily_snapshot`)
@@ -130,17 +136,35 @@ See [`api/README.md`](api/README.md) for detailed API documentation.
 
 **Current Implementation:**
 - Notebooks run manually via Databricks UI with widget parameter
-- No automated daily scheduling configured
 - **Delta Live Tables** - Already implemented in `pipelines/dlt_pipeline.py` (alternative approach)
 
+**Production Setup: Databricks Jobs**
 
-**Production Options:**
+**1. Daily Scheduled Run**
+```
+Job Configuration:
+- Schedule: Daily at 2:00 AM UTC (configurable depending on when raw data is available)
+```
 
-| Approach | Description | Pros | Cons |
-|----------|-------------|------|------|
-| **Databricks Jobs** | Schedule notebook as job with parameters | Native integration, simple setup | Coupled to Databricks |
-| **Delta Live Tables** | DLT continuous/triggered pipelines | Auto-scaling, data lineage, quality checks |  |
-| **Airflow/Dagster** | External orchestrator calls Databricks API | Multi-platform, complex workflows | Additional infrastructure |
+**2. Backfill Historical Dates**
+```
+Job Configuration:
+- Task Type: Notebook
+- Notebook: notebooks/app-insights.py
+- Parameters:
+  - Key: snapshot_date
+  - Value: {{backfill.iso_date}}
+- Backfill settings:
+  - Start date: 2025-10-22
+  - End date: 2025-10-30
+```
+
+Databricks passes dates as `YYYY-MM-DD`, notebook automatically converts to `YYYYMMDD`.
+
+**Alternative: Delta Live Tables** (already implemented)
+- Continuous or triggered pipeline
+- Built-in data lineage and quality checks
+- See `pipelines/dlt_pipeline.py`
 
 
 ---
