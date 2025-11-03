@@ -18,6 +18,7 @@ Modern FastAPI service serving Zapier app catalog insights from Databricks.
 - Python 3.11+
 - [uv](https://github.com/astral-sh/uv) package manager
 - Databricks workspace access with personal access token
+- `make` utility
 
 **Optional (Recommended):**
 - [Nix](https://nixos.org/download.html) with flakes enabled
@@ -42,6 +43,20 @@ cp .env.example .env
 # Edit .env with your Databricks credentials
 ```
 
+#### Using Makefile
+
+```bash
+# Navigate to api directory
+cd api
+
+# Install dependencies and set up environment
+make install
+
+# Copy environment template and configure
+cp .env.example .env
+# Edit .env with your Databricks credentials
+```
+
 ### Configuration
 
 Update `.env` with your Databricks credentials:
@@ -55,12 +70,24 @@ SCHEMA_NAME=your_schema  # e.g., rbanyi_mecom
 
 ### Running the API
 
+#### Using uv only
+
 ```bash
 # Development mode with auto-reload
 uv run uvicorn zapier_insights.main:app --reload --port 8000
 
 # Production mode
 uv run uvicorn zapier_insights.main:app --host 0.0.0.0 --port 8000
+```
+
+#### Using Makefile
+
+```bash
+# Development mode with auto-reload
+make run
+
+# Production mode
+make run-prod
 ```
 
 ### Access the API
@@ -134,6 +161,8 @@ curl "http://localhost:8000/insights/app-health-assessment?limit_per_segment=5"
 
 ### Running Tests
 
+#### Using uv only
+
 ```bash
 # Install dev dependencies
 uv sync --all-extras
@@ -145,7 +174,19 @@ uv run pytest
 uv run pytest --cov=zapier_insights --cov-report=html
 ```
 
+#### Using Makefile
+
+```bash
+# Run tests
+make test
+
+# Run tests with coverage
+make coverage
+```
+
 ### Code Quality
+
+#### Using uv only
 
 ```bash
 # Format code
@@ -156,6 +197,19 @@ uv run ruff check .
 
 # Type check
 uv run mypy src/
+```
+
+#### Using Makefile
+
+```bash
+# Format code
+make format
+
+# Lint code
+make lint
+
+# Type check
+make typecheck
 ```
 
 ### Project Structure
@@ -175,6 +229,7 @@ api/
 ├── tests/                # Test suite
 ├── pyproject.toml        # Project config (uv)
 ├── .env.example          # Environment template
+├── Makefile              # Project Makefile
 └── README.md
 ```
 

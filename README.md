@@ -216,5 +216,5 @@ Databricks passes dates as `YYYY-MM-DD`, notebook automatically converts to `YYY
 
 ---
 
-**Submission Date:** October 31, 2025
+**Submission Date:** November 3, 2025
 **Time Invested:** ~4 hours (focused on core functionality + documentation)
