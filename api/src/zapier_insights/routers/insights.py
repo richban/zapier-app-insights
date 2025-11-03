@@ -20,26 +20,20 @@ router = APIRouter(prefix="/insights", tags=["Insights"])
 settings = get_settings()
 
 
-def get_latest_snapshot(table_name: str) -> date:
+def _get_snapshot_date_sql(table_name: str, snapshot_date: date | None) -> str:
     """
-    Get the latest snapshot date from a table.
+    Get SQL for snapshot date filtering.
 
     Args:
         table_name: Full qualified table name
+        snapshot_date: Optional date to filter on
 
     Returns:
-        Latest snapshot date
-
-    Raises:
-        HTTPException: If no data available
+        SQL string for snapshot date
     """
-    date_query = f"SELECT MAX(snapshot_date) as max_date FROM {table_name}"
-    result = db.execute_query(date_query)
-
-    if not result or result[0]["max_date"] is None:
-        raise HTTPException(status_code=404, detail="No data available")
-
-    return result[0]["max_date"]
+    if snapshot_date:
+        return f"'{snapshot_date}'"
+    return f"(SELECT MAX(snapshot_date) FROM {table_name})"
 
 
 @router.get("/premium-analysis", response_model=PremiumAnalysisResponse)
@@ -51,11 +45,7 @@ def get_premium_analysis(
 
     Returns breakdown of premium/free apps with percentages.
     """
-    # Get latest snapshot if not specified
-    if snapshot_date is None:
-        snapshot_date = get_latest_snapshot(settings.full_gold_daily_table)
-
-    # Get premium analysis
+    snapshot_date_sql = _get_snapshot_date_sql(settings.full_gold_daily_table, snapshot_date)
     query = f"""
     SELECT
         snapshot_date,
@@ -65,7 +55,7 @@ def get_premium_analysis(
         ROUND(100.0 * premium_apps / NULLIF(total_apps, 0), 2) as premium_percentage,
         featured_apps
     FROM {settings.full_gold_daily_table}
-    WHERE snapshot_date = '{snapshot_date}'
+    WHERE snapshot_date = {snapshot_date_sql}
     """
 
     results = db.execute_query(query)
@@ -90,11 +80,9 @@ def get_category_insights(
     Returns metrics for each category including app counts and popularity rank distribution.
     Note: Popularity is a rank where lower numbers = more popular apps.
     """
-    # Get latest snapshot if not specified
-    if snapshot_date is None:
-        snapshot_date = get_latest_snapshot(settings.full_gold_category_table)
-
-    # Get category insights
+    snapshot_date_sql = _get_snapshot_date_sql(
+        settings.full_gold_category_table, snapshot_date
+    )
     query = f"""
     SELECT
         primary_category as category_slug,
@@ -106,7 +94,7 @@ def get_category_insights(
         worst_popularity_rank,
         ROUND(avg_age_in_days, 0) as avg_age_days
     FROM {settings.full_gold_category_table}
-    WHERE snapshot_date = '{snapshot_date}'
+    WHERE snapshot_date = {snapshot_date_sql}
       AND app_count >= {min_app_count}
     ORDER BY app_count DESC
     LIMIT {limit}
@@ -142,9 +130,7 @@ def get_app_health_assessment(
     - Optimize featuring strategy
     - Promote beta apps to stable
     """
-    # Get latest snapshot if not specified
-    if snapshot_date is None:
-        snapshot_date = get_latest_snapshot(settings.full_silver_table)
+    snapshot_date_sql = _get_snapshot_date_sql(settings.full_silver_table, snapshot_date)
 
     # Single optimized CTE query - all segments in one database round trip
     query = f"""
@@ -154,7 +140,7 @@ def get_app_health_assessment(
             COUNT(*) as total_apps,
             PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY popularity) as median_popularity
         FROM {settings.full_silver_table}
-        WHERE snapshot_date = '{snapshot_date}' AND popularity > 0
+        WHERE snapshot_date = {snapshot_date_sql} AND popularity > 0
     ),
     high_risk AS (
         -- Popular apps not updated in 90+ days
@@ -169,7 +155,7 @@ def get_app_health_assessment(
             age_in_days, is_featured
         FROM {settings.full_silver_table}
         CROSS JOIN stats
-        WHERE snapshot_date = '{snapshot_date}'
+        WHERE snapshot_date = {snapshot_date_sql}
           AND days_since_last_update >= 90
           AND popularity < stats.median_popularity
         ORDER BY popularity ASC
@@ -189,7 +175,7 @@ def get_app_health_assessment(
             is_featured
         FROM {settings.full_silver_table}
         CROSS JOIN stats
-        WHERE snapshot_date = '{snapshot_date}'
+        WHERE snapshot_date = {snapshot_date_sql}
           AND age_in_days <= 180
           AND (popularity < stats.median_popularity OR zap_usage_count > 100)
         ORDER BY popularity ASC, zap_usage_count DESC
@@ -208,7 +194,7 @@ def get_app_health_assessment(
             age_in_days, is_featured
         FROM {settings.full_silver_table}
         CROSS JOIN stats
-        WHERE snapshot_date = '{snapshot_date}'
+        WHERE snapshot_date = {snapshot_date_sql}
           AND is_featured = true
           AND popularity > stats.median_popularity
         ORDER BY popularity DESC
@@ -228,14 +214,14 @@ def get_app_health_assessment(
             is_featured
         FROM {settings.full_silver_table}
         CROSS JOIN stats
-        WHERE snapshot_date = '{snapshot_date}'
+        WHERE snapshot_date = {snapshot_date_sql}
           AND is_beta = true
           AND age_in_days >= 90
           AND (popularity < stats.median_popularity OR zap_usage_count > 50)
         ORDER BY popularity ASC, zap_usage_count DESC
         LIMIT {limit_per_segment}
     ),
-    all_segments AS (
+    all_segments_unioned AS (
         SELECT *, (SELECT total_apps FROM stats) as total_apps FROM high_risk
         UNION ALL
         SELECT *, (SELECT total_apps FROM stats) as total_apps FROM rising_stars
@@ -244,7 +230,7 @@ def get_app_health_assessment(
         UNION ALL
         SELECT *, (SELECT total_apps FROM stats) as total_apps FROM beta_graduation
     )
-    SELECT * FROM all_segments
+    SELECT *, {snapshot_date_sql} as effective_date FROM all_segments_unioned
     """
 
     # Execute single optimized query
@@ -259,15 +245,28 @@ def get_app_health_assessment(
     }
 
     total_apps = 0
+    effective_date = snapshot_date
+    if results:
+        effective_date = results[0]["effective_date"]
+
     for row in results:
         segment = row.pop("segment")
         total_apps = row.pop("total_apps")  # Same for all rows
+        row.pop("effective_date")
         if segment in segments:
             segments[segment].append(row)
 
+    if not results:
+        detail = (
+            f"No data found for snapshot_date={snapshot_date}"
+            if snapshot_date
+            else "No data available"
+        )
+        raise HTTPException(status_code=404, detail=detail)
+
     # Build response
     return AppHealthAssessmentResponse(
-        snapshot_date=snapshot_date,
+        snapshot_date=effective_date,
         total_apps_analyzed=total_apps,
         high_risk_apps=RiskSegment(
             count=len(segments["high_risk"]),
