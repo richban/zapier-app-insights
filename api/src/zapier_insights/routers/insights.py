@@ -171,8 +171,8 @@ def get_app_health_assessment(
         CROSS JOIN stats
         WHERE snapshot_date = '{snapshot_date}'
           AND days_since_last_update >= 90
-          AND popularity > stats.median_popularity
-        ORDER BY popularity DESC
+          AND popularity < stats.median_popularity
+        ORDER BY popularity ASC
         LIMIT {limit_per_segment}
     ),
     rising_stars AS (
@@ -191,8 +191,8 @@ def get_app_health_assessment(
         CROSS JOIN stats
         WHERE snapshot_date = '{snapshot_date}'
           AND age_in_days <= 180
-          AND (popularity > stats.median_popularity OR zap_usage_count > 100)
-        ORDER BY popularity DESC, zap_usage_count DESC
+          AND (popularity < stats.median_popularity OR zap_usage_count > 100)
+        ORDER BY popularity ASC, zap_usage_count DESC
         LIMIT {limit_per_segment}
     ),
     featured_underperformers AS (
@@ -210,8 +210,8 @@ def get_app_health_assessment(
         CROSS JOIN stats
         WHERE snapshot_date = '{snapshot_date}'
           AND is_featured = true
-          AND popularity < stats.median_popularity
-        ORDER BY popularity ASC
+          AND popularity > stats.median_popularity
+        ORDER BY popularity DESC
         LIMIT {limit_per_segment}
     ),
     beta_graduation AS (
@@ -231,8 +231,8 @@ def get_app_health_assessment(
         WHERE snapshot_date = '{snapshot_date}'
           AND is_beta = true
           AND age_in_days >= 90
-          AND (popularity > stats.median_popularity * 0.5 OR zap_usage_count > 50)
-        ORDER BY popularity DESC, zap_usage_count DESC
+          AND (popularity < stats.median_popularity OR zap_usage_count > 50)
+        ORDER BY popularity ASC, zap_usage_count DESC
         LIMIT {limit_per_segment}
     ),
     all_segments AS (
